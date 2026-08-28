@@ -7,7 +7,7 @@ Four sections only: Home, Customers, Billing, Assistant. The create-estimate voi
 ## Production services
 
 - **cappys-api** — customer, estimate, recurring-billing and activity API backed by D1.
-- **cappys-jobs** — queue consumer for email delivery, CSV import, payment reconciliation and call summaries.
+- **cappys-jobs** — queue consumer for approved-estimate email delivery; additional background jobs can use the same bounded contract.
 - **PayMe service binding** — Stripe onboarding, checkout, invoices, subscriptions and webhooks.
 - **Voice/call-center service bindings** — inbound receptionist, bill lookup, call capture and human escalation.
 - **Overwatch runtime adapter** — text/voice assistant with tools scoped to Cappy's tenant. Overwatch reads operational context but D1 remains authoritative.
@@ -30,6 +30,20 @@ Never commit or copy secret values. Stripe credentials are Cappy's business-spec
 ## Estimate approval invariant
 
 Voice transcript → structured draft → visible editable estimate → explicit approval → queued email. The assistant and receptionist cannot send an estimate without the approval record.
+
+Draft estimates are listed on Home under Needs Your Attention. Approval checks for a real customer email before queueing delivery; Cappy can still approve a record without sending it.
+
+## Recurring billing invariant
+
+CSV import or manual entry → pending local schedule → explicit Start Autopay action → PayMe-hosted customer authorization → active subscription. Saving or importing a schedule never charges a card.
+
+`cappys-api` talks only to the `checkout-worker` service binding. The adapter contract is:
+
+- `POST /api/stripe/connect` — begin Cappy's Stripe onboarding.
+- `POST /api/recurring/setup` — create a customer authorization session from a tenant-scoped external ID, amount, currency and interval.
+- `PATCH /api/recurring/:providerSubscriptionId` — change amount, cadence or active/paused state.
+
+This boundary keeps Cappy's dashboard independent from a particular PayMe frontend or database version.
 
 ## CSV import
 

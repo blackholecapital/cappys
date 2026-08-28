@@ -56,3 +56,24 @@ test("avatar images use an R2 binding with strict upload limits", async () => {
   assert.match(source, /5_000_000/);
   assert.match(source, /image\/webp/);
 });
+
+test("estimate review supports edits and checks the email before queueing", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /async function updateEstimate/);
+  assert.match(source, /Add a customer email before sending this estimate/);
+  assert.match(source, /WHERE id = \? AND status = 'draft'/);
+});
+
+test("recurring billing remains inert until explicit PayMe activation", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /async function saveBilling/);
+  assert.match(source, /status\) VALUES \(\?, \?, \?, \?, \?, 'pending'\)/);
+  assert.match(source, /async function activateBilling/);
+  assert.match(source, /payme\.internal\/api\/recurring\/setup/);
+});
+
+test("manual customers with a monthly amount get a billing schedule", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /if \(amountCents > 0\) statements\.push/);
+  assert.match(source, /await env\.DB\.batch\(statements\)/);
+});

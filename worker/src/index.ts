@@ -6,6 +6,7 @@ import { secret } from "./secrets";
 
 type CustomerInput = { name?: string; email?: string; phone?: string; address?: string; amount_cents?: number; billing_status?: string };
 type AssistantInput = { message?: string };
+type BillingInput = { customer_id?: string; amount_cents?: number; interval?: string; next_bill_at?: string | null; status?: string };
 type AssistantSettings = { personality: string; voice: string; has_avatar: boolean };
 type ReceptionistSettings = { enabled: boolean };
 type AppSettings = { assistant: AssistantSettings; receptionist: ReceptionistSettings };
@@ -49,10 +50,19 @@ async function route(request: Request, url: URL, env: Env, ctx: ExecutionContext
   if (request.method === "POST" && url.pathname === "/api/assistant/avatar") return uploadAvatar(request, env);
   if (request.method === "GET" && url.pathname === "/api/media/avatar") return serveAvatar(env);
   if (request.method === "POST" && url.pathname === "/api/imports/customers") return importCustomers(request, env);
+  if (request.method === "GET" && url.pathname === "/api/estimates") return listEstimates(env);
   if (request.method === "POST" && url.pathname === "/api/estimates/draft") return createDraft(request, env);
   if (request.method === "POST" && url.pathname === "/api/estimates/transcribe") return transcribeEstimate(request, env);
   const approval = url.pathname.match(/^\/api\/estimates\/([^/]+)\/approve$/);
   if (request.method === "POST" && approval) return approveEstimate(approval[1], request, env, ctx);
+  const estimate = url.pathname.match(/^\/api\/estimates\/([^/]+)$/);
+  if (request.method === "PATCH" && estimate) return updateEstimate(estimate[1], request, env);
+  if (request.method === "GET" && url.pathname === "/api/billing") return listBilling(env);
+  if (request.method === "POST" && url.pathname === "/api/billing") return saveBilling(request, env);
+  const billingActivation = url.pathname.match(/^\/api\/billing\/([^/]+)\/activate$/);
+  if (request.method === "POST" && billingActivation) return activateBilling(billingActivation[1], env);
+  const billing = url.pathname.match(/^\/api\/billing\/([^/]+)$/);
+  if (request.method === "PATCH" && billing) return updateBilling(billing[1], request, env);
   if (request.method === "POST" && url.pathname === "/api/billing/connect") return connectBilling(env);
   if (request.method === "POST" && url.pathname === "/api/assistant/message") return assistant(request, env);
   if (request.method === "POST" && url.pathname === "/api/video/session") return videoSession(request, env);
@@ -64,7 +74,7 @@ async function route(request: Request, url: URL, env: Env, ctx: ExecutionContext
 async function dashboard(env: Env): Promise<Response> {
   const [paid, due, estimates, calls] = await Promise.all([
     env.DB.prepare("SELECT COALESCE(SUM(amount_cents), 0) value FROM recurring_billing WHERE status = 'paid' AND strftime('%Y-%m', updated_at) = strftime('%Y-%m', 'now')").first<{ value: number }>(),
-    env.DB.prepare("SELECT COALESCE(SUM(amount_cents), 0) value FROM recurring_billing WHERE status IN ('pending','active') AND next_bill_at <= datetime('now', '+7 days')").first<{ value: number }>(),
+    env.DB.prepare("SELECT COALESCE(SUM(amount_cents), 0) value FROM recurring_billing WHERE status IN ('pending','setup_pending','active') AND next_bill_at <= datetime('now', '+7 days')").first<{ value: number }>(),
     env.DB.prepare("SELECT COUNT(*) value FROM estimates WHERE status IN ('draft','approved')").first<{ value: number }>(),
     env.DB.prepare("SELECT COUNT(*) value FROM call_records WHERE status = 'answered' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')").first<{ value: number }>()
   ]);
@@ -80,12 +90,38 @@ async function createCustomer(request: Request, env: Env): Promise<Response> {
   const input = await readJson<CustomerInput>(request);
   if (!input.name?.trim()) return error("Customer name is required");
   const id = crypto.randomUUID();
-  await env.DB.prepare(`
+  const amountCents = Math.max(0, input.amount_cents || 0);
+  const statements = [env.DB.prepare(`
     INSERT INTO customers (id, name, email, phone, address, amount_cents, billing_status)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, input.name.trim(), input.email?.trim() || null, input.phone?.trim() || null, input.address?.trim() || "", Math.max(0, input.amount_cents || 0), input.billing_status || "not_configured").run();
+  `).bind(id, input.name.trim(), input.email?.trim() || null, input.phone?.trim() || null, input.address?.trim() || "", amountCents, input.billing_status || "not_configured")];
+  if (amountCents > 0) statements.push(env.DB.prepare("INSERT INTO recurring_billing (id, customer_id, amount_cents, interval, status) VALUES (?, ?, ?, 'monthly', 'pending')").bind(crypto.randomUUID(), id, amountCents));
+  await env.DB.batch(statements);
   await audit(env, "cappy", "customer.created", "customer", id, {});
   return json({ customer: { id, ...input } }, 201);
+}
+
+async function listEstimates(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(`
+    SELECT e.id, e.customer_id, e.summary, e.total_cents, e.status, e.approved_at, e.emailed_at, e.created_at,
+      c.name customer_name, c.email customer_email
+    FROM estimates e LEFT JOIN customers c ON c.id = e.customer_id
+    ORDER BY CASE e.status WHEN 'draft' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, e.created_at DESC
+    LIMIT 100
+  `).all();
+  return json({ estimates: result.results });
+}
+
+async function updateEstimate(id: string, request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ summary?: string; total_cents?: number; customer_id?: string | null }>(request);
+  if (!input.summary?.trim()) return error("Estimate summary is required");
+  if (input.summary.length > 8_000) return error("Estimate summary is too long");
+  if (!Number.isInteger(input.total_cents) || (input.total_cents || 0) < 0) return error("Estimate total must be a positive dollar amount");
+  const result = await env.DB.prepare("UPDATE estimates SET customer_id = ?, summary = ?, total_cents = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'draft'")
+    .bind(input.customer_id || null, input.summary.trim(), input.total_cents, id).run();
+  if (!result.meta.changes) return error("Draft estimate not found", 404);
+  await audit(env, "cappy", "estimate.updated", "estimate", id, {});
+  return json({ estimate_id: id, status: "draft" });
 }
 
 async function importCustomers(request: Request, env: Env): Promise<Response> {
@@ -162,11 +198,102 @@ async function transcribeEstimate(request: Request, env: Env): Promise<Response>
 
 async function approveEstimate(id: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const input = await readJson<{ send_email?: boolean }>(request).catch(() => ({ send_email: true }));
+  if (input.send_email !== false) {
+    const recipient = await env.DB.prepare("SELECT c.email FROM estimates e LEFT JOIN customers c ON c.id = e.customer_id WHERE e.id = ? AND e.status = 'draft'").bind(id).first<{ email: string | null }>();
+    if (!recipient) return error("Draft estimate not found", 404);
+    if (!recipient.email) return error("Add a customer email before sending this estimate");
+  }
   const result = await env.DB.prepare("UPDATE estimates SET status = 'approved', approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'draft'").bind(id).run();
   if (!result.meta.changes) return error("Draft estimate not found", 404);
   if (input.send_email !== false) ctx.waitUntil(env.JOBS.send({ type: "estimate.approved", estimate_id: id }));
   await audit(env, "cappy", "estimate.approved", "estimate", id, { queued_email: input.send_email !== false });
   return json({ estimate_id: id, status: "approved", queued_email: input.send_email !== false });
+}
+
+async function listBilling(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(`
+    SELECT r.id, r.customer_id, r.amount_cents, r.interval, r.next_bill_at, r.status, r.stripe_subscription_id,
+      c.name customer_name, c.email customer_email, c.address customer_address
+    FROM recurring_billing r JOIN customers c ON c.id = r.customer_id
+    ORDER BY CASE r.status WHEN 'active' THEN 0 WHEN 'pending' THEN 1 WHEN 'setup_pending' THEN 2 ELSE 3 END, c.name
+    LIMIT 500
+  `).all();
+  return json({ billing: result.results });
+}
+
+function validateBilling(input: BillingInput): string | null {
+  if (!input.customer_id?.trim()) return "Customer is required";
+  if (!Number.isInteger(input.amount_cents) || (input.amount_cents || 0) <= 0) return "Billing amount must be greater than zero";
+  if (!new Set(["weekly", "monthly", "quarterly", "yearly"]).has(input.interval || "")) return "Choose a valid billing interval";
+  return null;
+}
+
+async function saveBilling(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<BillingInput>(request);
+  const validation = validateBilling(input);
+  if (validation) return error(validation);
+  const customer = await env.DB.prepare("SELECT id FROM customers WHERE id = ?").bind(input.customer_id).first();
+  if (!customer) return error("Customer not found", 404);
+  const existing = await env.DB.prepare("SELECT id FROM recurring_billing WHERE customer_id = ? AND status <> 'canceled' ORDER BY created_at DESC LIMIT 1").bind(input.customer_id).first<{ id: string }>();
+  const id = existing?.id || crypto.randomUUID();
+  if (existing) {
+    await env.DB.prepare("UPDATE recurring_billing SET amount_cents = ?, interval = ?, next_bill_at = ?, status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(input.amount_cents, input.interval, input.next_bill_at || null, id).run();
+  } else {
+    await env.DB.prepare("INSERT INTO recurring_billing (id, customer_id, amount_cents, interval, next_bill_at, status) VALUES (?, ?, ?, ?, ?, 'pending')")
+      .bind(id, input.customer_id, input.amount_cents, input.interval, input.next_bill_at || null).run();
+  }
+  await env.DB.prepare("UPDATE customers SET amount_cents = ?, billing_status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(input.amount_cents, input.customer_id).run();
+  await audit(env, "cappy", "billing.saved", "recurring_billing", id, { customer_id: input.customer_id, interval: input.interval });
+  return json({ billing_id: id, status: "pending" }, existing ? 200 : 201);
+}
+
+async function updateBilling(id: string, request: Request, env: Env): Promise<Response> {
+  const current = await env.DB.prepare("SELECT customer_id, amount_cents, interval, next_bill_at, status, stripe_subscription_id FROM recurring_billing WHERE id = ?").bind(id).first<{ customer_id: string; amount_cents: number; interval: string; next_bill_at: string | null; status: string; stripe_subscription_id: string | null }>();
+  if (!current) return error("Billing schedule not found", 404);
+  const input = await readJson<BillingInput>(request);
+  const merged = { ...current, ...input };
+  const validation = validateBilling(merged);
+  if (validation) return error(validation);
+  const status = input.status && new Set(["pending", "active", "paused", "canceled"]).has(input.status) ? input.status : undefined;
+  const providerChange = Boolean(current.stripe_subscription_id) && (Boolean(status) || current.amount_cents !== merged.amount_cents || current.interval !== merged.interval || current.next_bill_at !== merged.next_bill_at);
+  if (providerChange) {
+    const response = await env.PAYME.fetch(`https://payme.internal/api/recurring/${encodeURIComponent(current.stripe_subscription_id || "")}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tenant_id: env.TENANT_ID, status: status || current.status, amount_cents: merged.amount_cents, interval: merged.interval, next_bill_at: merged.next_bill_at || null })
+    });
+    if (!response.ok) return error("PayMe could not update recurring billing", 502);
+  }
+  await env.DB.prepare("UPDATE recurring_billing SET amount_cents = ?, interval = ?, next_bill_at = ?, status = COALESCE(?, status), updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(merged.amount_cents, merged.interval, merged.next_bill_at || null, status || null, id).run();
+  await env.DB.prepare("UPDATE customers SET amount_cents = ?, billing_status = COALESCE(?, billing_status), updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(merged.amount_cents, status || null, current.customer_id).run();
+  await audit(env, "cappy", "billing.updated", "recurring_billing", id, { status: status || "unchanged" });
+  return json({ billing_id: id, status: status || "updated" });
+}
+
+async function activateBilling(id: string, env: Env): Promise<Response> {
+  const record = await env.DB.prepare(`
+    SELECT r.id, r.amount_cents, r.interval, r.next_bill_at, c.id customer_id, c.name, c.email, c.phone, c.address
+    FROM recurring_billing r JOIN customers c ON c.id = r.customer_id WHERE r.id = ?
+  `).bind(id).first<{ id: string; amount_cents: number; interval: string; next_bill_at: string | null; customer_id: string; name: string; email: string | null; phone: string | null; address: string }>();
+  if (!record) return error("Billing schedule not found", 404);
+  if (!record.email) return error("Add the customer's email before starting autopay");
+  const response = await env.PAYME.fetch("https://payme.internal/api/recurring/setup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenant_id: env.TENANT_ID, external_id: record.id, customer: { external_id: record.customer_id, name: record.name, email: record.email, phone: record.phone, address: record.address }, amount_cents: record.amount_cents, currency: "usd", interval: record.interval, next_bill_at: record.next_bill_at, return_url: `${env.APP_ORIGIN}/?billing=connected` })
+  });
+  if (!response.ok) return error("PayMe could not start recurring billing", 502);
+  const payload = await response.json() as { subscription_id?: string; status?: string; checkout_url?: string; url?: string };
+  const status = payload.status === "active" ? "active" : "setup_pending";
+  await env.DB.batch([
+    env.DB.prepare("UPDATE recurring_billing SET stripe_subscription_id = COALESCE(?, stripe_subscription_id), status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(payload.subscription_id || null, status, id),
+    env.DB.prepare("UPDATE customers SET billing_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(status, record.customer_id)
+  ]);
+  await audit(env, "cappy", "billing.activation_started", "recurring_billing", id, { status });
+  return json({ billing_id: id, status, url: payload.checkout_url || payload.url || null });
 }
 
 async function connectBilling(env: Env): Promise<Response> {
@@ -184,10 +311,11 @@ async function assistant(request: Request, env: Env): Promise<Response> {
   if (!input.message?.trim()) return error("Message is required");
   const customers = await env.DB.prepare("SELECT id, name, address, amount_cents, billing_status FROM customers ORDER BY updated_at DESC LIMIT 25").all();
   const estimates = await env.DB.prepare("SELECT id, summary, total_cents, status, created_at FROM estimates ORDER BY created_at DESC LIMIT 15").all();
+  const billing = await env.DB.prepare("SELECT r.id, r.amount_cents, r.interval, r.next_bill_at, r.status, c.name customer_name FROM recurring_billing r JOIN customers c ON c.id = r.customer_id ORDER BY r.updated_at DESC LIMIT 25").all();
   const settings = await loadSettings(env);
   const reply = await askRuntime(env, [
     { role: "system", content: `You are Cappy's Electrical office assistant. Personality: ${settings.assistant.personality} Use the supplied business data. Never claim an action was completed unless the tool data proves it. Estimates require Cappy's visible approval before email.` },
-    { role: "system", content: JSON.stringify({ customers: customers.results, estimates: estimates.results }) },
+    { role: "system", content: JSON.stringify({ customers: customers.results, estimates: estimates.results, recurring_billing: billing.results }) },
     { role: "user", content: input.message.trim() }
   ], 350);
   return json({ reply: reply || "The assistant runtime is not configured yet. Your customer and estimate records are safe in Cappy's database." });
