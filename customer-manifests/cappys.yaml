@@ -1,0 +1,26 @@
+customer:
+  id: cappys-electrical
+  name: Cappy's Electrical
+
+cloudflare:
+  accountId: 841893af4dee7e52549a8adbef936100
+  zone: blackholecapital.xyz
+  workers:
+    - name: cappys-api
+  d1:
+    - name: cappys-db
+  queues:
+    - name: cappys-jobs
+  pages:
+    - name: cappys-electrical
+
+gpu:
+  endpoint: runtime-c
+
+providers:
+  google: false
+  slack: false
+  twilio: true
+  docusign: false
+  stripe: true
+

@@ -9,8 +9,8 @@ Four sections only: Home, Customers, Billing, Assistant. The create-estimate voi
 - **cappys-api** — customer, estimate, recurring-billing and activity API backed by D1.
 - **cappys-jobs** — queue consumer for email delivery, CSV import, payment reconciliation and call summaries.
 - **PayMe service binding** — Stripe onboarding, checkout, invoices, subscriptions and webhooks.
-- **Call-center service binding** — inbound receptionist, bill lookup, call capture and human escalation.
-- **Overwatch service binding** — text/voice assistant with tools scoped to Cappy's tenant.
+- **Voice/call-center service bindings** — inbound receptionist, bill lookup, call capture and human escalation.
+- **Overwatch runtime adapter** — text/voice assistant with tools scoped to Cappy's tenant. Overwatch reads operational context but D1 remains authoritative.
 - **Video service binding** — Buddy-style LiveKit/avatar session creation; avatar image and personality are tenant settings.
 
 ## Shared secret bindings
@@ -33,4 +33,8 @@ Voice transcript → structured draft → visible editable estimate → explicit
 
 ## CSV import
 
-Upload → parse/normalize → validation report → user confirms → idempotent customer/upcoming-bill upsert. Invalid rows remain downloadable and nothing is silently discarded.
+Upload → bounded parse/normalize → validation counts → batched customer insert. Invalid rows are counted and nothing is silently discarded. A confirmation screen and downloadable rejection report can be layered on without changing the import contract.
+
+## Runtime boundary
+
+Cloudflare owns customer, estimate, billing, call and audit state. Runtime-C/Tracer can resolve policy and lease voice/video execution, but neither becomes the system of record. Transport workers attach after caller, tenant, purpose and state have been resolved.

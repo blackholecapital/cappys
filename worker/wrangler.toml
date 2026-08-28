@@ -1,0 +1,46 @@
+name = "cappys-api"
+main = "src/index.ts"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+TENANT_ID = "cappys-electrical"
+ALLOWED_ORIGIN = "https://cappys.blackholecapital.xyz"
+EILA_RUNTIME_URL = ""
+APP_ORIGIN = "https://cappys.blackholecapital.xyz"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cappys-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "cappys-jobs"
+
+[[queues.consumers]]
+queue = "cappys-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+
+[[services]]
+binding = "PAYME"
+service = "checkout-worker"
+
+[[services]]
+binding = "VIDEO"
+service = "blackhole-video-worker"
+
+[[services]]
+binding = "VOICE"
+service = "blackhole-voice-worker"
+
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "cappys_events"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
