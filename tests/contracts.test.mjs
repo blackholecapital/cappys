@@ -27,3 +27,10 @@ test("D1 is authoritative for core business records", async () => {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   }
 });
+
+test("CSV import creates recurring schedules, not customer records alone", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /INSERT INTO recurring_billing/);
+  assert.match(source, /nextBillAt/);
+  assert.match(source, /interval/);
+});

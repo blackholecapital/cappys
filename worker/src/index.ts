@@ -92,10 +92,19 @@ async function importCustomers(request: Request, env: Env): Promise<Response> {
     const address = value(row, headers, "address", "serviceaddress", "billingaddress");
     if (!name) { rejected += 1; continue; }
     const id = crypto.randomUUID();
+    const amountCents = cents(value(row, headers, "amount", "monthlyamount", "balance"));
+    const interval = value(row, headers, "interval", "frequency") || "monthly";
+    const nextBillAt = value(row, headers, "nextbilldate", "nextbillingdate", "nextdue") || null;
     statements.push(env.DB.prepare(`
       INSERT INTO customers (id, name, email, phone, address, amount_cents, billing_status, source)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'csv')
-    `).bind(id, name, value(row, headers, "email") || null, value(row, headers, "phone", "telephone") || null, address, cents(value(row, headers, "amount", "monthlyamount", "balance")), value(row, headers, "status", "billingstatus") || "not_configured"));
+    `).bind(id, name, value(row, headers, "email") || null, value(row, headers, "phone", "telephone") || null, address, amountCents, value(row, headers, "status", "billingstatus") || "not_configured"));
+    if (amountCents > 0) {
+      statements.push(env.DB.prepare(`
+        INSERT INTO recurring_billing (id, customer_id, amount_cents, interval, next_bill_at, status)
+        VALUES (?, ?, ?, ?, ?, 'pending')
+      `).bind(crypto.randomUUID(), id, amountCents, interval, nextBillAt));
+    }
     imported += 1;
   }
   for (let index = 0; index < statements.length; index += 50) await env.DB.batch(statements.slice(index, index + 50));
