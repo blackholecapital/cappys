@@ -6,6 +6,14 @@ import { secret } from "./secrets";
 
 type CustomerInput = { name?: string; email?: string; phone?: string; address?: string; amount_cents?: number; billing_status?: string };
 type AssistantInput = { message?: string };
+type AssistantSettings = { personality: string; voice: string; has_avatar: boolean };
+type ReceptionistSettings = { enabled: boolean };
+type AppSettings = { assistant: AssistantSettings; receptionist: ReceptionistSettings };
+
+const DEFAULT_SETTINGS: AppSettings = {
+  assistant: { personality: "Friendly, patient and direct. Speak plainly and keep answers short.", voice: "vale", has_avatar: false },
+  receptionist: { enabled: true }
+};
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -36,6 +44,10 @@ async function route(request: Request, url: URL, env: Env, ctx: ExecutionContext
   if (request.method === "GET" && url.pathname === "/api/dashboard") return dashboard(env);
   if (request.method === "GET" && url.pathname === "/api/customers") return listCustomers(env);
   if (request.method === "POST" && url.pathname === "/api/customers") return createCustomer(request, env);
+  if (request.method === "GET" && url.pathname === "/api/settings") return getSettingsResponse(env);
+  if (request.method === "POST" && url.pathname === "/api/settings") return saveSettings(request, env, ctx);
+  if (request.method === "POST" && url.pathname === "/api/assistant/avatar") return uploadAvatar(request, env);
+  if (request.method === "GET" && url.pathname === "/api/media/avatar") return serveAvatar(env);
   if (request.method === "POST" && url.pathname === "/api/imports/customers") return importCustomers(request, env);
   if (request.method === "POST" && url.pathname === "/api/estimates/draft") return createDraft(request, env);
   if (request.method === "POST" && url.pathname === "/api/estimates/transcribe") return transcribeEstimate(request, env);
@@ -128,6 +140,7 @@ async function createDraft(request: Request, env: Env): Promise<Response> {
 async function transcribeEstimate(request: Request, env: Env): Promise<Response> {
   const form = await request.formData();
   const audio = form.get("audio");
+  const customerId = String(form.get("customer_id") || "").trim() || null;
   if (!(audio instanceof File)) return error("Audio file is required");
   if (audio.size > 12_000_000) return error("Recording is too large", 413);
   const key = await secret(env, "DEEPGRAM_API_KEY");
@@ -142,7 +155,7 @@ async function transcribeEstimate(request: Request, env: Env): Promise<Response>
   if (!transcript) return error("I could not hear enough to create an estimate");
   const drafted = await draftEstimate(env, transcript);
   const id = crypto.randomUUID();
-  await env.DB.prepare("INSERT INTO estimates (id, transcript, summary, total_cents) VALUES (?, ?, ?, ?)").bind(id, transcript, drafted.summary, drafted.total_cents).run();
+  await env.DB.prepare("INSERT INTO estimates (id, customer_id, transcript, summary, total_cents) VALUES (?, ?, ?, ?, ?)").bind(id, customerId, transcript, drafted.summary, drafted.total_cents).run();
   await audit(env, "cappy", "estimate.voice_drafted", "estimate", id, {});
   return json({ transcript, estimate: { id, ...drafted, status: "draft" } }, 201);
 }
@@ -171,8 +184,9 @@ async function assistant(request: Request, env: Env): Promise<Response> {
   if (!input.message?.trim()) return error("Message is required");
   const customers = await env.DB.prepare("SELECT id, name, address, amount_cents, billing_status FROM customers ORDER BY updated_at DESC LIMIT 25").all();
   const estimates = await env.DB.prepare("SELECT id, summary, total_cents, status, created_at FROM estimates ORDER BY created_at DESC LIMIT 15").all();
+  const settings = await loadSettings(env);
   const reply = await askRuntime(env, [
-    { role: "system", content: "You are Cappy's Electrical office assistant. Be patient, concise and direct. Use the supplied business data. Never claim an action was completed unless the tool data proves it. Estimates require Cappy's visible approval before email." },
+    { role: "system", content: `You are Cappy's Electrical office assistant. Personality: ${settings.assistant.personality} Use the supplied business data. Never claim an action was completed unless the tool data proves it. Estimates require Cappy's visible approval before email.` },
     { role: "system", content: JSON.stringify({ customers: customers.results, estimates: estimates.results }) },
     { role: "user", content: input.message.trim() }
   ], 350);
@@ -181,10 +195,18 @@ async function assistant(request: Request, env: Env): Promise<Response> {
 
 async function videoSession(request: Request, env: Env): Promise<Response> {
   const input = await readJson<Record<string, unknown>>(request);
+  const settings = await loadSettings(env);
   const response = await env.VIDEO.fetch("https://video.internal/api/video/session", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant_id: env.TENANT_ID, agent_name: "cappys-assistant", ...input })
+    body: JSON.stringify({
+      tenant_id: env.TENANT_ID,
+      agent_name: "cappys-assistant",
+      personality: settings.assistant.personality,
+      voice: settings.assistant.voice,
+      avatar_url: settings.assistant.has_avatar ? `${env.APP_ORIGIN}/api/media/avatar` : null,
+      ...input
+    })
   });
   if (!response.ok) return error("Video assistant could not start", 502);
   return new Response(response.body, response);
@@ -192,13 +214,87 @@ async function videoSession(request: Request, env: Env): Promise<Response> {
 
 async function receptionistConfig(request: Request, env: Env): Promise<Response> {
   const input = await readJson<Record<string, unknown>>(request);
+  const settings = await loadSettings(env);
   const response = await env.VOICE.fetch("https://voice.internal/api/receptionist/config", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant_id: env.TENANT_ID, business_name: "Cappy's Electrical", capabilities: ["bill_lookup", "customer_lookup", "estimate_request", "human_handoff"], ...input })
+    body: JSON.stringify({ tenant_id: env.TENANT_ID, business_name: "Cappy's Electrical", capabilities: ["bill_lookup", "customer_lookup", "estimate_request", "human_handoff"], ...settings.receptionist, personality: settings.assistant.personality, voice: settings.assistant.voice, ...input })
   });
   if (!response.ok) return error("Receptionist configuration failed", 502);
   return new Response(response.body, response);
+}
+
+async function loadSettings(env: Env): Promise<AppSettings> {
+  const result = await env.DB.prepare("SELECT key, value_json FROM settings WHERE key IN ('assistant','receptionist')").all<{ key: string; value_json: string }>();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  for (const row of result.results) {
+    try {
+      const stored = JSON.parse(row.value_json) as Record<string, unknown>;
+      if (row.key === "assistant") settings.assistant = { ...settings.assistant, ...stored } as AssistantSettings;
+      if (row.key === "receptionist") settings.receptionist = { ...settings.receptionist, ...stored } as ReceptionistSettings;
+    } catch { console.warn(JSON.stringify({ event: "invalid_setting", key: row.key })); }
+  }
+  return settings;
+}
+
+async function getSettingsResponse(env: Env): Promise<Response> {
+  return json({ settings: await loadSettings(env) });
+}
+
+async function saveSettings(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const input = await readJson<Partial<AppSettings>>(request);
+  const current = await loadSettings(env);
+  const personality = input.assistant?.personality?.trim();
+  if (personality && personality.length > 600) return error("Personality must be 600 characters or less");
+  const settings: AppSettings = {
+    assistant: {
+      ...current.assistant,
+      ...(input.assistant || {}),
+      personality: personality || current.assistant.personality,
+      voice: input.assistant?.voice?.trim() || current.assistant.voice
+    },
+    receptionist: { ...current.receptionist, ...(input.receptionist || {}) }
+  };
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO settings (key, value_json, updated_at) VALUES ('assistant', ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP").bind(JSON.stringify(settings.assistant)),
+    env.DB.prepare("INSERT INTO settings (key, value_json, updated_at) VALUES ('receptionist', ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP").bind(JSON.stringify(settings.receptionist))
+  ]);
+  await audit(env, "cappy", "settings.updated", "settings", "assistant", { receptionist_enabled: settings.receptionist.enabled, voice: settings.assistant.voice });
+  ctx.waitUntil(syncReceptionist(env, settings).catch((cause) => console.error(JSON.stringify({ event: "receptionist_sync_failed", cause: cause instanceof Error ? cause.message : String(cause) }))));
+  return json({ settings });
+}
+
+async function syncReceptionist(env: Env, settings: AppSettings): Promise<void> {
+  const response = await env.VOICE.fetch("https://voice.internal/api/receptionist/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenant_id: env.TENANT_ID, business_name: "Cappy's Electrical", capabilities: ["bill_lookup", "customer_lookup", "estimate_request", "human_handoff"], enabled: settings.receptionist.enabled, personality: settings.assistant.personality, voice: settings.assistant.voice })
+  });
+  if (!response.ok) throw new Error(`Voice service returned ${response.status}`);
+}
+
+async function uploadAvatar(request: Request, env: Env): Promise<Response> {
+  const form = await request.formData();
+  const avatar = form.get("avatar");
+  if (!(avatar instanceof File)) return error("Avatar image is required");
+  if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(avatar.type)) return error("Avatar must be a JPEG, PNG or WebP image");
+  if (avatar.size > 5_000_000) return error("Avatar must be smaller than 5 MB", 413);
+  await env.MEDIA.put("assistant/avatar", avatar.stream(), { httpMetadata: { contentType: avatar.type, cacheControl: "public, max-age=300" } });
+  const settings = await loadSettings(env);
+  settings.assistant.has_avatar = true;
+  await env.DB.prepare("INSERT INTO settings (key, value_json, updated_at) VALUES ('assistant', ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP").bind(JSON.stringify(settings.assistant)).run();
+  await audit(env, "cappy", "assistant.avatar_updated", "settings", "assistant", { content_type: avatar.type, size: avatar.size });
+  return json({ avatar_url: "/api/media/avatar", has_avatar: true });
+}
+
+async function serveAvatar(env: Env): Promise<Response> {
+  const avatar = await env.MEDIA.get("assistant/avatar");
+  if (!avatar) return error("Avatar not found", 404);
+  const headers = new Headers();
+  avatar.writeHttpMetadata(headers);
+  headers.set("etag", avatar.httpEtag);
+  headers.set("cache-control", "public, max-age=300");
+  return new Response(avatar.body, { headers });
 }
 
 async function proxyService(request: Request, service: Fetcher, path: string): Promise<Response> {

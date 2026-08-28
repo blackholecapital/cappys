@@ -12,8 +12,9 @@ Run from the Black Hole server where Wrangler is already authenticated and the c
 ## One-time Cloudflare resources
 
 1. npx wrangler d1 create cappys-db
-2. npx wrangler queues create cappys-jobs
-3. npx wrangler pages project create cappys-electrical
+2. npx wrangler r2 bucket create cappys-media
+3. npx wrangler queues create cappys-jobs
+4. npx wrangler pages project create cappys-electrical
 
 Copy only the returned D1 database ID into worker/wrangler.toml, replacing the zero UUID. Do not add secret values.
 

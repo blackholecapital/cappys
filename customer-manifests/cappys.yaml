@@ -9,6 +9,8 @@ cloudflare:
     - name: cappys-api
   d1:
     - name: cappys-db
+  r2:
+    - name: cappys-media
   queues:
     - name: cappys-jobs
   pages:
@@ -23,4 +25,3 @@ providers:
   twilio: true
   docusign: false
   stripe: true
-

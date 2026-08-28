@@ -34,3 +34,25 @@ test("CSV import creates recurring schedules, not customer records alone", async
   assert.match(source, /nextBillAt/);
   assert.match(source, /interval/);
 });
+
+test("voice estimates stay attached to the selected customer", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /form\.get\("customer_id"\)/);
+  assert.match(source, /INSERT INTO estimates \(id, customer_id, transcript/);
+});
+
+test("assistant setup persists and flows into voice and video", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  assert.match(source, /INSERT INTO settings/);
+  assert.match(source, /avatar_url: settings\.assistant\.has_avatar/);
+  assert.match(source, /syncReceptionist\(env, settings\)/);
+});
+
+test("avatar images use an R2 binding with strict upload limits", async () => {
+  const source = await readFile(new URL("worker/src/index.ts", root), "utf8");
+  const config = await readFile(new URL("worker/wrangler.toml", root), "utf8");
+  assert.match(config, /binding = "MEDIA"/);
+  assert.match(source, /env\.MEDIA\.put\("assistant\/avatar"/);
+  assert.match(source, /5_000_000/);
+  assert.match(source, /image\/webp/);
+});
