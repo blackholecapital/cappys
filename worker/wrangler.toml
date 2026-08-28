@@ -1,5 +1,6 @@
 name = "cappys-api"
 main = "src/index.ts"
+account_id = "841893af4dee7e52549a8adbef936100"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
@@ -8,7 +9,16 @@ workers_dev = true
 TENANT_ID = "cappys-electrical"
 ALLOWED_ORIGIN = "https://cappys.blackholecapital.xyz"
 EILA_RUNTIME_URL = ""
-APP_ORIGIN = "https://cappys.blackholecapital.xyz"
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/twilio/*"]
+
+[[routes]]
+pattern = "cappys.blackholecapital.xyz"
+custom_domain = true
 
 [[d1_databases]]
 binding = "DB"

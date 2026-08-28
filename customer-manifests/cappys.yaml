@@ -7,14 +7,14 @@ cloudflare:
   zone: blackholecapital.xyz
   workers:
     - name: cappys-api
+      customDomain: cappys.blackholecapital.xyz
+      staticAssets: web/dist
   d1:
     - name: cappys-db
   r2:
     - name: cappys-media
   queues:
     - name: cappys-jobs
-  pages:
-    - name: cappys-electrical
 
 gpu:
   endpoint: runtime-c

@@ -77,3 +77,24 @@ test("manual customers with a monthly amount get a billing schedule", async () =
   assert.match(source, /if \(amountCents > 0\) statements\.push/);
   assert.match(source, /await env\.DB\.batch\(statements\)/);
 });
+
+test("one Worker serves the dashboard and API on the Cappy's domain", async () => {
+  const config = await readFile(new URL("worker/wrangler.toml", root), "utf8");
+  assert.match(config, /\[assets\]/);
+  assert.match(config, /directory = "\.\.\/web\/dist"/);
+  assert.match(config, /run_worker_first = \["\/api\/\*", "\/twilio\/\*"\]/);
+  assert.match(config, /pattern = "cappys\.blackholecapital\.xyz"/);
+  assert.match(config, /custom_domain = true/);
+});
+
+test("Black Hole bootstrap provisions resources without committing a D1 ID", async () => {
+  const config = await readFile(new URL("worker/wrangler.toml", root), "utf8");
+  const bootstrap = await readFile(new URL("scripts/bootstrap-blackhole.sh", root), "utf8");
+  assert.match(config, /database_id = "00000000-0000-0000-0000-000000000000"/);
+  assert.match(bootstrap, /wrangler d1 create cappys-db/);
+  assert.match(bootstrap, /wrangler r2 bucket create cappys-media/);
+  assert.match(bootstrap, /wrangler queues create cappys-jobs/);
+  assert.match(bootstrap, /prepare-deploy-config\.mjs/);
+  assert.match(bootstrap, /npm run deploy:api/);
+  assert.doesNotMatch(bootstrap, /XYZ_DEMO_[A-Z_]+\s*=/);
+});

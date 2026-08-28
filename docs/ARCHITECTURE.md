@@ -6,7 +6,7 @@ Four sections only: Home, Customers, Billing, Assistant. The create-estimate voi
 
 ## Production services
 
-- **cappys-api** — customer, estimate, recurring-billing and activity API backed by D1.
+- **cappys-api** — one full-stack Worker serving the React dashboard, customer/estimate/billing APIs, and Twilio ingress on one custom domain.
 - **cappys-jobs** — queue consumer for approved-estimate email delivery; additional background jobs can use the same bounded contract.
 - **PayMe service binding** — Stripe onboarding, checkout, invoices, subscriptions and webhooks.
 - **Voice/call-center service bindings** — inbound receptionist, bill lookup, call capture and human escalation.

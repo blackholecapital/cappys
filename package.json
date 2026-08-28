@@ -14,7 +14,6 @@
     "test": "node --test tests/*.test.mjs",
     "db:migrate:local": "wrangler d1 migrations apply cappys-db --local --config worker/wrangler.toml",
     "db:migrate:remote": "wrangler d1 migrations apply cappys-db --remote --config worker/wrangler.toml",
-    "deploy:web": "wrangler pages deploy web/dist --project-name cappys-electrical",
     "deploy:api": "node ../cloudflare-platform/scripts/deploy-with-secrets-store.mjs --config worker/wrangler.toml --store default_secrets_store --bind DEEPGRAM_API_KEY=XYZ_DEMO_DEEPGRAM_API_KEY --bind RESEND_API_KEY=XYZ_DEMO_RESEND_API_KEY --bind TWILIO_ACCOUNT_SID=XYZ_DEMO_TWILIO_ACCOUNT_SID --bind TWILIO_AUTH_TOKEN=XYZ_DEMO_TWILIO_AUTH_TOKEN --bind EILA_RUNTIME_TOKEN=XYZ_DEMO_EILA_RUNTIME_TOKEN --bind LIVEKIT_API_KEY=XYZ_DEMO_LIVEKIT_API_KEY --bind LIVEKIT_API_SECRET=XYZ_DEMO_LIVEKIT_API_SECRET"
   },
   "dependencies": {

@@ -1,34 +1,39 @@
 # Cappy's Electrical deployment
 
-Run from the Black Hole server where Wrangler is already authenticated and the cappys and cloudflare-platform repositories exist beside each other.
+Cappy's is one full-stack Cloudflare Worker. The Worker serves the React dashboard, `/api/*`, and `/twilio/*` at `cappys.blackholecapital.xyz`; there is no separate Pages project.
 
-## Validation
+## Black Hole workspace
 
-1. npm install
-2. npm run check
-3. npm test
-4. npm run build
+Run this on the authenticated Black Hole/EILA sidecar:
 
-## One-time Cloudflare resources
+```bash
+export BLACKHOLE_WORKSPACE=/mnt/eila-hot-sidecar/workspace
+mkdir -p "$BLACKHOLE_WORKSPACE"
+if [ -d "$BLACKHOLE_WORKSPACE/cappys/.git" ]; then
+  git -C "$BLACKHOLE_WORKSPACE/cappys" pull --ff-only origin main
+else
+  git clone https://github.com/blackholecapital/cappys.git "$BLACKHOLE_WORKSPACE/cappys"
+fi
+cd "$BLACKHOLE_WORKSPACE/cappys"
+bash scripts/bootstrap-blackhole.sh
+```
 
-1. npx wrangler d1 create cappys-db
-2. npx wrangler r2 bucket create cappys-media
-3. npx wrangler queues create cappys-jobs
-4. npx wrangler pages project create cappys-electrical
+The bootstrap is idempotent. It:
 
-Copy only the returned D1 database ID into worker/wrangler.toml, replacing the zero UUID. Do not add secret values.
+1. Keeps `cappys` and `cloudflare-platform` beside each other.
+2. Installs, type-checks, tests, and builds the dashboard.
+3. Verifies the authenticated Cloudflare account and required shared Workers.
+4. Creates or reuses `cappys-db`, `cappys-media`, and `cappys-jobs`.
+5. Injects the D1 ID only into a temporary deployment config and restores the committed zero UUID afterward.
+6. Applies D1 migrations.
+7. Binds `default_secrets_store` through the platform deployment helper without reading or copying secret values.
+8. Deploys the Worker, static dashboard, and custom domain.
+9. Verifies `https://cappys.blackholecapital.xyz/api/health`.
 
-Apply the database with npm run db:migrate:remote.
+To connect a reachable Overwatch endpoint during deployment, set `CAPPYS_EILA_RUNTIME_URL` before running the bootstrap. If omitted, the operational dashboard deploys and the assistant returns its safe not-configured response.
 
-Deploy the API through the centralized Secrets Store helper with npm run deploy:api.
+## After first deployment
 
-Build and deploy the dashboard with npm run build:web and npm run deploy:web.
-
-Then route cappys.blackholecapital.xyz/api/* and cappys.blackholecapital.xyz/twilio/* to cappys-api, and the remaining hostname to the cappys-electrical Pages project.
-
-## External setup still intentionally required
-
-- Connect Cappy's own Stripe account from the Billing screen.
-- Attach the purchased Twilio number to /twilio/voice.
-- Set EILA_RUNTIME_URL to the Runtime-C/Overwatch OpenAI-compatible endpoint.
-- Confirm the existing service names checkout-worker, blackhole-video-worker, and blackhole-voice-worker in the target Cloudflare account before the first production deploy.
+- Connect Cappy's Stripe account from Billing.
+- Point the purchased Twilio number at `https://cappys.blackholecapital.xyz/twilio/voice`.
+- Upload the assistant avatar from Assistant → Personality & avatar; it is stored in `cappys-media` R2.

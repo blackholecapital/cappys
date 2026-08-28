@@ -60,10 +60,10 @@ async function route(request: Request, url: URL, env: Env, ctx: ExecutionContext
   if (request.method === "GET" && url.pathname === "/api/billing") return listBilling(env);
   if (request.method === "POST" && url.pathname === "/api/billing") return saveBilling(request, env);
   const billingActivation = url.pathname.match(/^\/api\/billing\/([^/]+)\/activate$/);
-  if (request.method === "POST" && billingActivation) return activateBilling(billingActivation[1], env);
+  if (request.method === "POST" && billingActivation) return activateBilling(billingActivation[1], request, env);
   const billing = url.pathname.match(/^\/api\/billing\/([^/]+)$/);
   if (request.method === "PATCH" && billing) return updateBilling(billing[1], request, env);
-  if (request.method === "POST" && url.pathname === "/api/billing/connect") return connectBilling(env);
+  if (request.method === "POST" && url.pathname === "/api/billing/connect") return connectBilling(request, env);
   if (request.method === "POST" && url.pathname === "/api/assistant/message") return assistant(request, env);
   if (request.method === "POST" && url.pathname === "/api/video/session") return videoSession(request, env);
   if (request.method === "POST" && url.pathname === "/api/receptionist/config") return receptionistConfig(request, env);
@@ -273,7 +273,7 @@ async function updateBilling(id: string, request: Request, env: Env): Promise<Re
   return json({ billing_id: id, status: status || "updated" });
 }
 
-async function activateBilling(id: string, env: Env): Promise<Response> {
+async function activateBilling(id: string, request: Request, env: Env): Promise<Response> {
   const record = await env.DB.prepare(`
     SELECT r.id, r.amount_cents, r.interval, r.next_bill_at, c.id customer_id, c.name, c.email, c.phone, c.address
     FROM recurring_billing r JOIN customers c ON c.id = r.customer_id WHERE r.id = ?
@@ -283,7 +283,7 @@ async function activateBilling(id: string, env: Env): Promise<Response> {
   const response = await env.PAYME.fetch("https://payme.internal/api/recurring/setup", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant_id: env.TENANT_ID, external_id: record.id, customer: { external_id: record.customer_id, name: record.name, email: record.email, phone: record.phone, address: record.address }, amount_cents: record.amount_cents, currency: "usd", interval: record.interval, next_bill_at: record.next_bill_at, return_url: `${env.APP_ORIGIN}/?billing=connected` })
+    body: JSON.stringify({ tenant_id: env.TENANT_ID, external_id: record.id, customer: { external_id: record.customer_id, name: record.name, email: record.email, phone: record.phone, address: record.address }, amount_cents: record.amount_cents, currency: "usd", interval: record.interval, next_bill_at: record.next_bill_at, return_url: `${new URL(request.url).origin}/?billing=connected` })
   });
   if (!response.ok) return error("PayMe could not start recurring billing", 502);
   const payload = await response.json() as { subscription_id?: string; status?: string; checkout_url?: string; url?: string };
@@ -296,11 +296,11 @@ async function activateBilling(id: string, env: Env): Promise<Response> {
   return json({ billing_id: id, status, url: payload.checkout_url || payload.url || null });
 }
 
-async function connectBilling(env: Env): Promise<Response> {
+async function connectBilling(request: Request, env: Env): Promise<Response> {
   const response = await env.PAYME.fetch("https://payme.internal/api/stripe/connect", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant_id: env.TENANT_ID, return_url: `${env.APP_ORIGIN}/?stripe=connected` })
+    body: JSON.stringify({ tenant_id: env.TENANT_ID, return_url: `${new URL(request.url).origin}/?stripe=connected` })
   });
   if (!response.ok) return error("PayMe could not start Stripe setup", 502);
   return new Response(response.body, response);
@@ -324,6 +324,7 @@ async function assistant(request: Request, env: Env): Promise<Response> {
 async function videoSession(request: Request, env: Env): Promise<Response> {
   const input = await readJson<Record<string, unknown>>(request);
   const settings = await loadSettings(env);
+  const origin = new URL(request.url).origin;
   const response = await env.VIDEO.fetch("https://video.internal/api/video/session", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -332,7 +333,7 @@ async function videoSession(request: Request, env: Env): Promise<Response> {
       agent_name: "cappys-assistant",
       personality: settings.assistant.personality,
       voice: settings.assistant.voice,
-      avatar_url: settings.assistant.has_avatar ? `${env.APP_ORIGIN}/api/media/avatar` : null,
+      avatar_url: settings.assistant.has_avatar ? `${origin}/api/media/avatar` : null,
       ...input
     })
   });
