@@ -15,7 +15,7 @@ Four sections only: Home, Customers, Billing, Assistant. The create-estimate voi
 
 ## Shared secret bindings
 
-Consume through Cloudflare Secrets Store `default_secrets_store` and the `blackholecapital/cloudflare-platform` deployment tooling:
+Consume through Cloudflare Secrets Store `default_secrets_store` and this repository's `scripts/deploy-with-secrets-store.mjs` deployment helper:
 
 - `XYZ_DEMO_LIVEKIT_API_KEY`
 - `XYZ_DEMO_LIVEKIT_API_SECRET`

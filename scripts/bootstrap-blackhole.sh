@@ -2,8 +2,6 @@
 set -Eeuo pipefail
 
 CAPPYS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BLACKHOLE_WORKSPACE="$(dirname "$CAPPYS_ROOT")"
-PLATFORM_ROOT="$BLACKHOLE_WORKSPACE/cloudflare-platform"
 WRANGLER_CONFIG="$CAPPYS_ROOT/worker/wrangler.toml"
 ACCOUNT_ID="841893af4dee7e52549a8adbef936100"
 
@@ -13,16 +11,9 @@ for command in git node npm curl; do
   command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
 
-if [[ ! -d "$PLATFORM_ROOT/.git" ]]; then
-  git clone https://github.com/blackholecapital/cloudflare-platform.git "$PLATFORM_ROOT"
-elif git -C "$PLATFORM_ROOT" diff --quiet && git -C "$PLATFORM_ROOT" diff --cached --quiet; then
-  git -C "$PLATFORM_ROOT" pull --ff-only
-else
-  echo "Preserving uncommitted cloudflare-platform changes; skipping its pull."
-fi
-
 echo "Installing and validating Cappy's..."
 npm ci
+npm run check
 npm run build
 npm test
 

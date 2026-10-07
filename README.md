@@ -26,4 +26,4 @@ Run npm install, npm run check, npm test, and npm run build.
 
 ## Deployment
 
-The source of truth is this repository. Use docs/DEPLOY.md for the one-command Black Hole deployment. The full-stack Worker deployment goes through blackholecapital/cloudflare-platform/scripts/deploy-with-secrets-store.mjs, which resolves default_secrets_store without committing a store ID or reading any secret value.
+The source of truth is this repository. Use docs/DEPLOY.md for the one-command Black Hole deployment. The full-stack Worker deployment uses the included scripts/deploy-with-secrets-store.mjs, which resolves default_secrets_store without committing a store ID or reading any secret value.
